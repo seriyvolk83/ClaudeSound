@@ -3,12 +3,23 @@
 
 Usage:
   friend.py <kind> [--force]   play a sound; <kind> in:
-                               chirp working excited alarm greeting done question
+                               chirp working excited alarm greeting done question sad
+  friend.py stop               read Stop-hook JSON from stdin, play done or sad
   friend.py on                 enable sounds
   friend.py off                disable sounds
   friend.py status             show current state
   friend.py test               play one of each (sequentially)
+
+Sound moments:
+  greeting  — you submit a message        (UserPromptSubmit)
+  working   — Claude runs a shell command  (PreToolUse Bash)
+  chirp     — Claude reads / searches      (PreToolUse Read/Grep/WebFetch…)
+  excited   — Claude edits / writes code   (PostToolUse Edit/Write…)
+  question  — Claude needs your input      (Notification)
+  done      — Claude finishes successfully (Stop reason=end_turn)
+  sad       — interrupted or limit reached (Stop reason=interrupted/max_turns)
 """
+import json
 import math
 import os
 import random
@@ -28,13 +39,14 @@ STATE_FILE = PLUGIN_DIR / "state"
 RATE = 22050
 
 MIN_INTERVAL = {
-    "chirp": 10.0,
-    "working": 6.0,
-    "excited": 0.0,
-    "alarm": 3.0,
-    "greeting": 0.0,
-    "done": 0.0,
-    "question": 0.0,
+    "chirp":    10.0,
+    "working":   6.0,
+    "excited":   0.0,
+    "alarm":     3.0,
+    "greeting":  0.0,
+    "done":      0.0,
+    "question":  0.0,
+    "sad":       0.0,
 }
 
 
@@ -69,7 +81,7 @@ def should_play(kind, force):
 
 # ---------------- synthesis ----------------
 
-def _envelope(n, attack=0.015, release=0.035):
+def _envelope(n, attack=0.015, release=0.040):
     a = max(1, int(attack * RATE))
     r = max(1, int(release * RATE))
     out = [1.0] * n
@@ -81,7 +93,7 @@ def _envelope(n, attack=0.015, release=0.035):
 
 
 def syllable(duration, f_start, f_end, vibrato_hz=0.0, vibrato_depth=0.0, wave_type="sine"):
-    """One swept-tone 'syllable' with optional vibrato."""
+    """One swept-tone syllable with optional vibrato."""
     n = max(1, int(duration * RATE))
     env = _envelope(n)
     out = [0.0] * n
@@ -116,36 +128,42 @@ def join(*parts):
 # ---------------- presets ----------------
 
 def make_chirp():
-    f0 = random.uniform(600, 900)
-    f1 = f0 * random.uniform(1.4, 2.2)
-    return syllable(random.uniform(0.10, 0.16), f0, f1, vibrato_hz=18, vibrato_depth=0.05)
+    """Very short read/scan blip — varied direction so it never sounds like a question."""
+    f0 = random.uniform(500, 1000)
+    ratio = random.choice([0.55, 0.70, 0.90, 1.0, 1.25, 1.40])
+    f1 = f0 * ratio
+    return syllable(random.uniform(0.08, 0.13), f0, f1, vibrato_hz=15, vibrato_depth=0.04)
 
 
 def make_working():
+    """2–3 short punchy blips for Bash execution — varied, never a long sweep."""
     parts = []
     for _ in range(random.randint(2, 3)):
-        f0 = random.uniform(400, 1100)
-        f1 = f0 * random.choice([0.6, 1.5, 1.8])
+        f0 = random.uniform(400, 1000)
+        ratio = random.choice([0.55, 0.70, 0.85, 1.0, 1.30])
+        f1 = f0 * ratio
         parts.append(syllable(
-            random.uniform(0.08, 0.14), f0, f1,
-            vibrato_hz=random.uniform(15, 30), vibrato_depth=0.07,
+            random.uniform(0.07, 0.11), f0, f1,
+            vibrato_hz=random.uniform(20, 35), vibrato_depth=0.06,
         ))
-        parts.append(silence(random.uniform(0.02, 0.05)))
+        parts.append(silence(random.uniform(0.02, 0.04)))
     return join(*parts)
 
 
 def make_excited():
+    """1–2 quick blips when Claude writes/edits a file — short like other working sounds."""
     parts = []
-    base = random.uniform(500, 700)
-    for i in range(random.randint(3, 4)):
-        f0 = base * (1.2 ** i)
-        f1 = f0 * random.uniform(1.3, 1.7)
-        parts.append(syllable(0.09, f0, f1, vibrato_hz=22, vibrato_depth=0.08))
+    for _ in range(random.randint(1, 2)):
+        f0 = random.uniform(700, 1100)
+        ratio = random.choice([0.70, 0.85, 1.0, 1.20, 1.35])
+        f1 = f0 * ratio
+        parts.append(syllable(random.uniform(0.06, 0.10), f0, f1, vibrato_hz=22, vibrato_depth=0.05))
         parts.append(silence(0.02))
     return join(*parts)
 
 
 def make_alarm():
+    """Urgent descending alarm (unused by default hooks, available manually)."""
     parts = []
     f = random.uniform(800, 1000)
     for _ in range(3):
@@ -156,6 +174,7 @@ def make_alarm():
 
 
 def make_greeting():
+    """Friendly wake-up on user prompt submit."""
     return join(
         syllable(0.10, 700, 1100, vibrato_hz=20, vibrato_depth=0.08),
         silence(0.03),
@@ -163,38 +182,63 @@ def make_greeting():
     )
 
 
-def make_done():
-    return join(
-        syllable(0.12, 600, 700, vibrato_hz=18, vibrato_depth=0.06),
-        silence(0.04),
-        syllable(0.12, 500, 600),
-        silence(0.04),
-        syllable(0.20, 800, 1500, vibrato_hz=24, vibrato_depth=0.10),
-    )
-
-
 def make_question():
-    # Inquisitive 'boodleoop?' — two short steady taps then a long rising
-    # sweep that imitates the rising-pitch intonation of a spoken question.
-    # Repeated twice so it carries if the user has stepped away.
+    """Language-curve question: two anchor taps then a long strong rise low→high.
+    Played twice so it carries if you stepped away."""
     one = join(
-        syllable(0.10, 620, 640, vibrato_hz=14, vibrato_depth=0.04),
-        silence(0.05),
-        syllable(0.10, 720, 740, vibrato_hz=14, vibrato_depth=0.04),
-        silence(0.05),
-        syllable(0.36, 520, 1600, vibrato_hz=18, vibrato_depth=0.08),
+        syllable(0.09, 480, 500, vibrato_hz=10, vibrato_depth=0.03),   # anchor low
+        silence(0.045),
+        syllable(0.09, 560, 590, vibrato_hz=10, vibrato_depth=0.03),   # step up
+        silence(0.045),
+        syllable(0.52, 450, 2100, vibrato_hz=20, vibrato_depth=0.09),  # long rising sweep ↑
     )
-    return join(one, silence(0.18), one)
+    return join(one, silence(0.22), one)
+
+
+def make_sad():
+    """Wa-Wa-Wa-wa-a-a: three descending beats then a long trailing fade — R2D2 dejected."""
+    parts = []
+    descents = [(960, 370), (790, 295), (630, 230)]
+    for f_start, f_end in descents:
+        parts.append(syllable(
+            0.24, f_start, f_end,
+            vibrato_hz=7, vibrato_depth=0.14,
+            wave_type="triangle",
+        ))
+        parts.append(silence(0.07))
+    # Long trailing "wa-a-a" fading into silence
+    parts.append(syllable(
+        0.65, 510, 150,
+        vibrato_hz=4, vibrato_depth=0.18,
+        wave_type="triangle",
+    ))
+    return join(*parts)
+
+
+def make_done():
+    """Long happy completion: crescendo that rises to a joyful peak then settles."""
+    return join(
+        syllable(0.10, 550,  700, vibrato_hz=16, vibrato_depth=0.06),
+        silence(0.035),
+        syllable(0.12, 700,  950, vibrato_hz=20, vibrato_depth=0.08),
+        silence(0.035),
+        syllable(0.15, 850, 1200, vibrato_hz=22, vibrato_depth=0.09),
+        silence(0.040),
+        syllable(0.58, 950, 2300, vibrato_hz=26, vibrato_depth=0.11),  # long joyful rise ↑
+        silence(0.050),
+        syllable(0.20, 1900, 1600, vibrato_hz=20, vibrato_depth=0.07), # settle happily ↘
+    )
 
 
 PRESETS = {
-    "chirp": make_chirp,
-    "working": make_working,
-    "excited": make_excited,
-    "alarm": make_alarm,
+    "chirp":    make_chirp,
+    "working":  make_working,
+    "excited":  make_excited,
+    "alarm":    make_alarm,
     "greeting": make_greeting,
-    "done": make_done,
     "question": make_question,
+    "sad":      make_sad,
+    "done":     make_done,
 }
 
 
@@ -213,7 +257,6 @@ def write_wav(samples, path):
 def play(kind, force=False):
     if not should_play(kind, force):
         return
-    # Reserve the slot before forking so concurrent hooks don't double-fire.
     write_last_ts(time.time())
     try:
         pid = os.fork()
@@ -222,7 +265,7 @@ def play(kind, force=False):
     if pid != 0:
         return  # parent returns immediately
 
-    # ---- child: synth + play, then exit ----
+    # child: synth + play, then exit
     try:
         os.setsid()
     except OSError:
@@ -239,6 +282,19 @@ def play(kind, force=False):
         pass
     finally:
         os._exit(0)
+
+
+def stop_from_stdin():
+    """Read Claude Code Stop-hook JSON from stdin and play done or sad."""
+    try:
+        data = json.loads(sys.stdin.read())
+        reason = data.get("reason", "end_turn")
+    except Exception:
+        reason = "end_turn"
+    if reason in ("max_turns", "interrupted"):
+        play("sad", force=True)
+    else:
+        play("done", force=True)
 
 
 # ---------------- CLI ----------------
@@ -273,10 +329,14 @@ def main():
         return 0
 
     if cmd == "test":
-        for k in ("greeting", "chirp", "working", "excited", "question", "alarm", "done"):
+        for k in ("greeting", "chirp", "working", "excited", "question", "sad", "done"):
             print("playing", k)
             play(k, force=True)
-            time.sleep(1.4)
+            time.sleep(1.8)
+        return 0
+
+    if cmd == "stop":
+        stop_from_stdin()
         return 0
 
     if cmd in PRESETS:
