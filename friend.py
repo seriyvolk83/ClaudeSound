@@ -302,8 +302,7 @@ def stop_from_stdin():
 def main():
     args = sys.argv[1:]
     if not args:
-        print(__doc__)
-        return 0
+        args = ["status"]
 
     cmd = args[0]
 

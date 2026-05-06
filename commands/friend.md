@@ -6,4 +6,4 @@ allowed-tools: Bash(python3:*)
 
 Run this command and report the script's output in one short line. Do nothing else.
 
-!`python3 $HOME/.claude/friend/friend.py ${ARGUMENTS:-status}`
+!`python3 ~/.claude/friend/friend.py $ARGUMENTS`
