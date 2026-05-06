@@ -33,6 +33,8 @@ cd <repo-name>
 ./install.sh
 ```
 
+Then press ⭐️ star for this repo 😉
+
 The installer:
 
 1. copies `friend.py` to `~/.claude/friend/friend.py`
