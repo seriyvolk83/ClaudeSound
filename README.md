@@ -4,6 +4,8 @@ Synthesized robot-beep sound effects for [Claude Code](https://claude.com/claude
 
 Pure Python stdlib — no `pip install`, no external sound files. Sounds are synthesized at runtime as FM-modulated sine waves and played through `afplay`.
 
+![Tired waiting](https://community.element14.com/resized-image/__size/620x423/__key/communityserver-blogs-components-weblogfiles/00-00-00-01-19/0184.contentimage_5F00_54691.jpg)
+
 ## What you hear
 
 | Claude event                                                | Sound      | Min gap | Why                          |
