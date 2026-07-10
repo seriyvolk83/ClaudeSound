@@ -13,9 +13,35 @@ Pure Python stdlib — no `pip install`, no external sound files. Sounds are syn
 | `Read` / `Grep` / `Glob` / `WebFetch` / `WebSearch` starts  | `chirp`    | 10 s    | rare progress tick           |
 | `Edit` / `Write` / `MultiEdit` / `NotebookEdit` finishes    | `excited`  | always  | **a file actually changed**  |
 | Claude is waiting on you (permission / idle)                | `question` | always  | come back to the computer    |
+| A `Bash` command fails (non-zero exit / interrupted)        | `oops`     | 3 s     | something went wrong mid-work |
 | Claude finishes the turn                                    | `done`     | always  | task complete                |
+| Turn ends by interrupt / max turns                          | `sad`      | always  | it didn't end well           |
 
-`alarm` (descending) is also defined and can be played manually with `friend.py alarm`, but is not wired to any event by default.
+`oops` is a short square-wave "bzzt-bzzt" — a mechanical fault, deliberately distinct in timbre from the sine-wave beeps and from the `sad` ending. `alarm` (descending) is also defined and can be played manually with `friend.py alarm`, but is not wired to any event by default.
+
+## Voices
+
+Running two Claude windows side by side? Give each project its own voice so you can tell them apart by ear. All voices play the *same melodies* — same rising/falling contours, same rhythm — but on a completely different instrument, so each window has an unmistakable character while the vocabulary you've learned still applies:
+
+| Voice     | Instrument                                                                  |
+| --------- | --------------------------------------------------------------------------- |
+| `classic` | the original robot beeps (swept tones + vibrato)                            |
+| `whistle` | someone whistling the tunes — pure tone, slow human vibrato                 |
+| `wood`    | marimba taps — pitch sweeps become little xylophone runs                    |
+| `chime`   | music-box bells — melodies ring out as tiny arpeggios                       |
+
+For the struck voices (`wood`, `chime`) every note is snapped to a major-pentatonic scale, so even the randomized work blips always sound musical.
+
+The voice is stored **per project directory** (`~/.claude/friend/voices.json`), so each window picks it up automatically from its working directory:
+
+```
+/friend voice           # show the voice used here
+/friend voice list      # list voices
+/friend voice wood      # this project now sounds like a marimba
+/friend voice reset     # back to classic
+```
+
+A `FRIEND_VOICE=wood` environment variable overrides the per-directory setting — handy when two windows share the same directory: `FRIEND_VOICE=chime claude`.
 
 ## Requirements
 
@@ -63,10 +89,11 @@ Then merge the contents of `settings.hooks.json` into `~/.claude/settings.json` 
 From inside `claude`:
 
 ```
-/friend          # show status
-/friend on       # enable sounds
-/friend off      # disable sounds (persistent across sessions)
-/friend test     # play one of every sound
+/friend            # status + list of all commands (same as /friend help)
+/friend on         # enable sounds
+/friend off        # disable sounds (persistent across sessions)
+/friend test       # play one of every sound (in this directory's voice)
+/friend voice wood # set this project's voice (see Voices above)
 ```
 
 Or directly from your shell:
